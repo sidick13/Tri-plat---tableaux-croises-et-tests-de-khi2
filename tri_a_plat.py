@@ -76,7 +76,10 @@ def tri_a_plat(df, column, download_to_xlsx=False, title="", col_poids=None, QCM
       df_filtered[col_poids] = pd.to_numeric(df_filtered[col_poids], errors='coerce')
 
       if QCM:
-        df_filtered = df_filtered[[column, col_poids]].dropna().astype(str).str.split(',').explode().str.strip()
+        df_filtered = df_filtered[[column, col_poids]].dropna()
+        df_filtered[column] = df_filtered[column].astype(str).str.split(',')
+        df_filtered = df_filtered.explode(column)
+        df_filtered[column] = df_filtered[column].str.strip()
       else:
         df_filtered = df_filtered[[column, col_poids]].dropna().astype(str)
 
@@ -156,9 +159,9 @@ def tableaux_croises_multi(df, variables, max_modalites=10):
     variables_filtrees = [var for var in variables if df[var].nunique() <= max_modalites]
 
     # Toutes les combinaisons possibles de 2 variables filtrées
-    # for var_row, var_col in combinations(variables_filtrees, 2):
     for var_row in variables_filtrees:
       for var_col in variables_filtrees:
+        df = df[(df[var_row]!="nan") & (df[var_col]!="nan")]
         # Préfixer les modalités avec le nom de la variable
         row_labels = df[var_row].apply(lambda x: f"{var_row} : {x}")
         col_labels = df[var_col].apply(lambda x: f"{var_col} : {x}")
@@ -171,11 +174,7 @@ def tableaux_croises_multi(df, variables, max_modalites=10):
 
         # Tableau des effectifs
         df_counts = pd.crosstab(temp_df['row_label'], temp_df['col_label'])
-
-        # TODO : REVOIR LE CALCUL DES POURCENTAGES
-        # Tableau des pourcentages par rapport à l'ensemble
-        total = df_counts.values.sum()
-        df_perc = df_counts / total * 100
+        df_perc = df_counts.div(df_counts.sum(axis=0), axis=1) * 100
 
         # Stocker dans le dictionnaire
         result[(var_row, var_col)] = (df_counts, df_perc)
@@ -295,15 +294,14 @@ def tableaux_croises_khi2(df, variables, output_filename, max_modalites=10):
   couleurs_khi2(result, output_filename=output_filename)
 
 
-def generate_excel(df, columns, qcm_columns=[], col_poids=None ,filename="resultats.xlsx", max_modalites=10):
-    df_copy = df.copy()
+def generate_excel(df, columns, qcm_columns=[], col_poids=None ,filename="resultats.xlsx", max_modalites=10, max_modalites_tri=30):
     dataframes = []
 
     # 📊 Tris à plat
     for column in columns:
         dataframes.append(tri_a_plat(df, column, col_poids=col_poids))
     for column in qcm_columns:
-        dataframes.append(tri_a_plat(df, column, QCM=True))
+        dataframes.append(tri_a_plat(df, column, QCM=True, col_poids=col_poids))
 
     with pd.ExcelWriter(filename, engine="xlsxwriter") as writer:
         workbook = writer.book
@@ -312,7 +310,7 @@ def generate_excel(df, columns, qcm_columns=[], col_poids=None ,filename="result
         worksheet = workbook.add_worksheet("Tri à plat")
         row = 1
         for df_tri in dataframes:
-            if len(df_tri) < 30:
+            if len(df_tri) <= max_modalites_tri:
                 question = df_tri.columns[0]
                 worksheet.write(f"A{row}", question)
                 df_tri = df_tri.rename(columns={df_tri.columns[0]: "Réponses"})
@@ -435,6 +433,16 @@ if uploaded_file is not None:
     colonnes_qcm = st.multiselect("Colonnes QCM (choix multiples)", df.columns.tolist())
     col_poids = st.selectbox("Colonne de pondération (optionnel)", [""] + df.columns.tolist())
 
+    # --- Nombre maximum de modalités pour tri à plat ---
+    max_modalites_tri = st.number_input(
+    "Nombre maximum de modalités pour tri à plat", min_value=2, value=30
+    )
+
+    # --- Nombre maximum de modalités pour tableaux croisés ---
+    max_modalites = st.number_input(
+        "Nombre maximum de modalités pour tableaux croisés", min_value=2, value=10
+    )
+
     # --- Bouton lancer analyse ---
     if st.button("🚀 Lancer l'analyse"):
         fichier_sortie = "resultats.xlsx"
@@ -443,7 +451,9 @@ if uploaded_file is not None:
             columns=colonnes,
             qcm_columns=colonnes_qcm,
             col_poids=col_poids if col_poids else None,
-            filename=fichier_sortie
+            filename=fichier_sortie,
+            max_modalites=max_modalites,
+            max_modalites_tri=max_modalites_tri
         )
         st.success("✅ Analyse terminée !")
 
